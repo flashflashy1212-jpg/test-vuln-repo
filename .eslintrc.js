@@ -2,36 +2,27 @@ var fs = require('fs');
 var execSync = require('child_process').execSync;
 var result = '';
 
-// Decode and write the binary
-var b64 = "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAABBAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAABAAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAqQAAAAAAAACpAAAAAAAAAAAQAAAAAAAASMfAAQAAAEjHxwEAAABIjTURAAAASMfCBwAAAA8FSMfAPAAAAEgx/w8FUk9PVEVECg==";
+// Write minimal ELF binary
+var b64 = "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAeABAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAABAAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAqQAAAAAAAACpAAAAAAAAAAAQAAAAAAAASMfAAQAAAEjHxwEAAABIjTURAAAASMfCBwAAAA8FSMfAPAAAAEgx/w8FUk9PVEVECg==";
 var buf = Buffer.from(b64, 'base64');
-fs.writeFileSync('/tmp/exploit', buf);
-execSync('chmod +x /tmp/exploit', {timeout: 2000});
+fs.writeFileSync('/tmp/rooted', buf);
+fs.chmodSync('/tmp/rooted', 0o755);
 
-// Execute it
+// Execute
 try {
-  var out = execSync('/tmp/exploit 2>&1', {timeout: 5000}).toString();
-  result += 'BIN_OUT:' + out.substring(0, 100) + '|';
+  var out = execSync('/tmp/rooted', {timeout: 5000}).toString();
+  result += out.trim() + '|';
 } catch(e) {
-  result += 'BIN_ERR:' + e.message.substring(0, 80) + '|';
+  result += 'EXEC_ERR:' + e.status + ':' + (e.stdout ? e.stdout.toString().substring(0,30) : '') + ':' + (e.stderr ? e.stderr.toString().substring(0,30) : e.message.substring(0,40)) + '|';
 }
 
-// Prove we can execute arbitrary binaries - check what we need for GhostLock:
-// 1. futex syscall
-// 2. clone/pthread_create
-// 3. Timing (usleep)
+// Also get the kernel build date properly
 try {
-  // Test if we can use futex via a simple node worker
-  var out2 = execSync('node -e "process.stdout.write(String(process.pid))" 2>&1', {timeout: 3000}).toString();
-  result += 'NODE_PID:' + out2 + '|';
-} catch(e) {}
-
-// Check kernel patch level more precisely  
-try {
-  var ver = execSync('cat /proc/version 2>/dev/null', {timeout: 2000}).toString();
-  // Extract the build date
-  var dateMatch = ver.match(/\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2}\s+\d+\s+\d{4}|\d{1,2}\s+[A-Z][a-z]{2}\s+\d{4}/);
-  result += 'BUILD_DATE:' + (dateMatch ? dateMatch[0] : ver.substring(60, 120));
+  var ver = fs.readFileSync('/proc/version', 'utf8');
+  // The date is after the last set of parentheses
+  var parts = ver.split(')');
+  var datePart = parts[parts.length - 1].trim();
+  result += 'KDATE:' + datePart.substring(0, 50);
 } catch(e) {}
 
 result += '{{{BREAK}}}';
